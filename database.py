@@ -8,8 +8,13 @@ DATABASE_URL = settings.DATABASE_URL
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-database = Database(DATABASE_URL)
 _is_sqlite = DATABASE_URL.startswith("sqlite")
+
+kwargs = {}
+if not _is_sqlite and "sslmode" not in DATABASE_URL:
+    kwargs["ssl"] = "require"
+
+database = Database(DATABASE_URL, **kwargs)
 
 
 async def init_db():
