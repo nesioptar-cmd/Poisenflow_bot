@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from bot import bot, dp
-from database import database, init_db
+from database import init_db
 from server import router
 
 logging.basicConfig(level=logging.INFO)
@@ -22,7 +22,6 @@ async def lifespan(app: FastAPI):
     except asyncio.CancelledError:
         pass
     await bot.session.close()
-    await database.disconnect()
 
 
 app = FastAPI(lifespan=lifespan)

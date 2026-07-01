@@ -1,49 +1,49 @@
-import logging
+import asyncio
+import sqlite3
+from pathlib import Path
 
-from databases import Database
+DB_PATH = Path(__file__).parent / "mapping.db"
 
-from config import settings
 
-DATABASE_URL = settings.DATABASE_URL
-if DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+def _init_db():
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS user_mappings ("
+        "  email TEXT PRIMARY KEY,"
+        "  chat_id INTEGER NOT NULL,"
+        "  created_at TEXT DEFAULT (datetime('now'))"
+        ")"
+    )
+    conn.commit()
+    conn.close()
 
-_is_sqlite = DATABASE_URL.startswith("sqlite")
 
-kwargs = {}
-if not _is_sqlite and "sslmode" not in DATABASE_URL:
-    kwargs["ssl"] = "require"
+def _save_mapping(email: str, chat_id: int):
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.execute(
+        "INSERT OR REPLACE INTO user_mappings (email, chat_id) VALUES (?, ?)",
+        (email, chat_id),
+    )
+    conn.commit()
+    conn.close()
 
-database = Database(DATABASE_URL, **kwargs)
+
+def _get_chat_id(email: str) -> int | None:
+    conn = sqlite3.connect(str(DB_PATH))
+    row = conn.execute(
+        "SELECT chat_id FROM user_mappings WHERE email = ?", (email,)
+    ).fetchone()
+    conn.close()
+    return row[0] if row else None
 
 
 async def init_db():
-    await database.connect()
-    await database.execute(
-        """CREATE TABLE IF NOT EXISTS user_mappings (
-            email TEXT PRIMARY KEY,
-            chat_id BIGINT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )"""
-    )
-    logging.info("База данных инициализирована: %s", DATABASE_URL)
+    await asyncio.to_thread(_init_db)
 
 
 async def save_mapping(email: str, chat_id: int):
-    if _is_sqlite:
-        query = (
-            "INSERT OR REPLACE INTO user_mappings (email, chat_id) "
-            "VALUES (:email, :chat_id)"
-        )
-    else:
-        query = (
-            "INSERT INTO user_mappings (email, chat_id) VALUES (:email, :chat_id) "
-            "ON CONFLICT (email) DO UPDATE SET chat_id = EXCLUDED.chat_id"
-        )
-    await database.execute(query, {"email": email, "chat_id": chat_id})
+    await asyncio.to_thread(_save_mapping, email, chat_id)
 
 
 async def get_chat_id(email: str) -> int | None:
-    query = "SELECT chat_id FROM user_mappings WHERE email = :email"
-    row = await database.fetch_one(query, {"email": email})
-    return row[0] if row else None
+    return await asyncio.to_thread(_get_chat_id, email)
