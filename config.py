@@ -6,6 +6,7 @@ class Settings(BaseSettings):
 
     BOT_TOKEN: str
     DATABASE_URL: str = "sqlite:///./mapping.db"
+    PYTHONANYWHERE_URL: str = ""
 
 
 settings = Settings()

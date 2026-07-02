@@ -47,3 +47,16 @@ async def save_mapping(email: str, chat_id: int):
 
 async def get_chat_id(email: str) -> int | None:
     return await asyncio.to_thread(_get_chat_id, email)
+
+
+async def get_all_mappings() -> list[tuple[str, int]]:
+    return await asyncio.to_thread(_get_all_mappings)
+
+
+def _get_all_mappings() -> list[tuple[str, int]]:
+    conn = sqlite3.connect(str(DB_PATH))
+    rows = conn.execute(
+        "SELECT email, chat_id FROM user_mappings"
+    ).fetchall()
+    conn.close()
+    return rows
