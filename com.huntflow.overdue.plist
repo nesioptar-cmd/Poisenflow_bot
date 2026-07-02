@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.huntflow.overdue</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/udov/.huntflow/venv/bin/python</string>
+        <string>/Users/udov/.huntflow/overdue_checker.py</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>3600</integer>
+    <key>StandardOutPath</key>
+    <string>/tmp/huntflow-overdue.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/huntflow-overdue.log</string>
+    <key>WorkingDirectory</key>
+    <string>/Users/udov/.huntflow</string>
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>

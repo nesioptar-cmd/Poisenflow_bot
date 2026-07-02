@@ -108,3 +108,6 @@ async def get_settings(chat_id: int) -> tuple[int, int]:
 
 async def set_settings(chat_id: int, status_change: int | None = None, overdue: int | None = None):
     await asyncio.to_thread(_set_settings, chat_id, status_change, overdue)
+
+
+_init_db()

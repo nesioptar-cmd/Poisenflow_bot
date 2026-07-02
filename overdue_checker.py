@@ -31,6 +31,21 @@ if not all([BOT_TOKEN, API_TOKEN, ACCOUNT_ID]):
 
 # ─── БД ────────────────────────────────────────────────────────
 
+def init_db():
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS overdue_log ("
+        "  applicant_id INTEGER,"
+        "  vacancy_id INTEGER,"
+        "  status_id INTEGER,"
+        "  sent_at TEXT DEFAULT (datetime('now')),"
+        "  PRIMARY KEY (applicant_id, vacancy_id, status_id)"
+        ")"
+    )
+    conn.commit()
+    conn.close()
+
+
 def _was_notified(applicant_id: int, vacancy_id: int, status_id: int) -> bool:
     conn = sqlite3.connect(str(DB_PATH))
     row = conn.execute(
@@ -93,8 +108,9 @@ def get_coworker_emails() -> dict[int, str]:
 def get_all_applicants() -> list[dict]:
     items = []
     page = 1
-    while True:
-        data = hf_get(f"/accounts/{ACCOUNT_ID}/applicants?page={page}&count=100&order_by=-id")
+    max_pages = 20  # ~600 последних кандидатов
+    while page <= max_pages:
+        data = hf_get(f"/accounts/{ACCOUNT_ID}/applicants?page={page}&count=30&order_by=-id")
         items.extend(data.get("items", []))
         if page >= data.get("total_pages", 1):
             break
@@ -130,6 +146,8 @@ def check_overdue():
     applicants = get_all_applicants()
 
     logging.info("Проверка %d кандидатов...", len(applicants))
+    checked = 0
+    notified_total = 0
 
     for app in applicants:
         links = app.get("links", [])
@@ -154,8 +172,12 @@ def check_overdue():
             continue
 
         changed = datetime.fromisoformat(changed_str)
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
-        days_on = (now - changed).days
+        if changed.tzinfo is not None:
+            now = datetime.now(timezone.utc).astimezone()
+            days_on = (now - changed).days
+        else:
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            days_on = (now - changed).days
 
         if days_on <= max_days:
             continue
@@ -208,9 +230,13 @@ def check_overdue():
 
         if notified:
             _mark_notified(app["id"], vacancy_id, status_id)
+        checked += 1
+        if checked % 100 == 0:
+            logging.info("Обработано %d/%d", checked, len(applicants))
 
-    logging.info("Проверка завершена")
+    logging.info("Проверка завершена, отправлено %d уведомлений", notified_total)
 
 
 if __name__ == "__main__":
+    init_db()
     check_overdue()

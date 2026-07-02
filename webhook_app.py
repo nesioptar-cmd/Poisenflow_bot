@@ -250,9 +250,10 @@ def _get_coworker_emails() -> dict[int, str]:
 def _get_all_applicants() -> list[dict]:
     items = []
     page = 1
-    while True:
+    max_pages = 20
+    while page <= max_pages:
         data = _hf_get(
-            f"/accounts/{ACCOUNT_ID}/applicants?page={page}&count=100&order_by=-id"
+            f"/accounts/{ACCOUNT_ID}/applicants?page={page}&count=30&order_by=-id"
         )
         items.extend(data.get("items", []))
         if page >= data.get("total_pages", 1):
@@ -310,8 +311,12 @@ def _run_overdue_check():
             continue
 
         changed = datetime.fromisoformat(changed_str)
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
-        days_on = (now - changed).days
+        if changed.tzinfo is not None:
+            now = datetime.now(timezone.utc).astimezone()
+            days_on = (now - changed).days
+        else:
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            days_on = (now - changed).days
 
         if days_on <= max_days:
             continue
