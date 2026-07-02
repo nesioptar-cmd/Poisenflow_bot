@@ -1,12 +1,7 @@
-"""Скрипт проверки просрочек на этапах.
-
-Запускается на PythonAnywhere по расписанию (Scheduled Tasks).
-Использует ту же SQLite БД, что и webhook_app.py.
-"""
-
 import os
 import sqlite3
 import logging
+from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -22,6 +17,7 @@ API_TOKEN = os.getenv("HF_API_TOKEN")
 ACCOUNT_ID = os.getenv("HF_ACCOUNT_ID")
 
 API_BASE = "https://api.huntflow.ru/v2"
+HF_WEB = f"https://huntflow.ru/account/{ACCOUNT_ID}"
 DB_PATH = Path(__file__).parent / "mapping.db"
 HEADERS = {"Authorization": f"Bearer {API_TOKEN}"}
 
@@ -92,23 +88,19 @@ def hf_get(path: str) -> dict:
 
 def get_statuses() -> dict[int, dict]:
     data = hf_get(f"/accounts/{ACCOUNT_ID}/vacancies/statuses")
-    result = {}
-    for s in data["items"]:
-        if not s.get("removed"):
-            result[s["id"]] = s
-    return result
+    return {s["id"]: s for s in data["items"] if not s.get("removed")}
 
 
 def get_coworker_emails() -> dict[int, str]:
     data = hf_get(f"/accounts/{ACCOUNT_ID}/coworkers")
-    return {cw.get("member"): cw.get("email", "") for cw in data.get("items", [])
-            if cw.get("member")}
+    return {cw.get("member"): cw.get("email", "")
+            for cw in data.get("items", []) if cw.get("member")}
 
 
 def get_all_applicants() -> list[dict]:
     items = []
     page = 1
-    max_pages = 20  # ~600 последних кандидатов
+    max_pages = 20
     while page <= max_pages:
         data = hf_get(f"/accounts/{ACCOUNT_ID}/applicants?page={page}&count=30&order_by=-id")
         items.extend(data.get("items", []))
@@ -134,7 +126,7 @@ def get_vacancy_name(vacancy_id: int) -> str:
 def send_telegram(chat_id: int, text: str):
     requests.post(
         f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-        json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
+        json={"chat_id": chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True},
     )
 
 
@@ -147,7 +139,9 @@ def check_overdue():
 
     logging.info("Проверка %d кандидатов...", len(applicants))
     checked = 0
-    notified_total = 0
+
+    # Собираем просрочки: {(vacancy_id, recruiter_email): [item, ...]}
+    overdue_by_vacancy = defaultdict(list)
 
     for app in applicants:
         links = app.get("links", [])
@@ -185,7 +179,6 @@ def check_overdue():
         if _was_notified(app["id"], vacancy_id, status_id):
             continue
 
-        # ── рекрутер ──
         recruiter_email = None
         for log in get_applicant_logs(app["id"]):
             if log.get("type") == "STATUS" and log.get("status") == status_id:
@@ -196,16 +189,38 @@ def check_overdue():
                 break
 
         app_name = " ".join(filter(None, [app.get("first_name"), app.get("last_name")])) or f"ID {app['id']}"
-        vacancy_name = get_vacancy_name(vacancy_id)
         stage_name = status_info.get("name", f"ID {status_id}")
 
-        text = (
-            f"⏰ <b>Просрочка!</b>\n\n"
-            f"👤 <b>Кандидат:</b> {app_name}\n"
-            f"💼 <b>Вакансия:</b> {vacancy_name}\n"
-            f"🎯 <b>Этап:</b> {stage_name}\n"
-            f"⏳ <b>Просрочено:</b> {days_on} дн. (максимум {max_days})"
-        )
+        overdue_by_vacancy[(vacancy_id, recruiter_email)].append({
+            "applicant_id": app["id"],
+            "status_id": status_id,
+            "name": app_name,
+            "stage": stage_name,
+            "days_on": days_on,
+            "max_days": max_days,
+        })
+
+        checked += 1
+        if checked % 100 == 0:
+            logging.info("Обработано %d/%d", checked, len(applicants))
+
+    # ── Отправка ──
+    notified_total = 0
+    vacancy_name_cache = {}
+
+    for (vacancy_id, recruiter_email), items in overdue_by_vacancy.items():
+        if vacancy_id not in vacancy_name_cache:
+            vacancy_name_cache[vacancy_id] = get_vacancy_name(vacancy_id)
+        vname = vacancy_name_cache[vacancy_id]
+
+        parts = [f"⏰ <b>Просрочки</b>\n💼 <b>{vname}</b> ({len(items)})"]
+        for it in items:
+            parts.append(
+                f"👤 {it['name']}\n"
+                f"   🎯 {it['stage']} — {it['days_on']}/{it['max_days']} дн."
+            )
+        parts.append(f'\n<a href="{HF_WEB}/vacancy/{vacancy_id}/">🔗 Открыть вакансию</a>')
+        text = "\n\n".join(parts)
 
         notified = set()
 
@@ -215,7 +230,7 @@ def check_overdue():
                 try:
                     send_telegram(chat_id, text)
                     notified.add(chat_id)
-                    logging.info("Рекрутер %s уведомлён", recruiter_email)
+                    logging.info("Рекрутер %s уведомлён (%d просрочек)", recruiter_email, len(items))
                 except Exception as e:
                     logging.error("Ошибка рекрутеру %s: %s", recruiter_email, e)
 
@@ -229,10 +244,9 @@ def check_overdue():
                         logging.error("Ошибка %s: %s", chat_id, e)
 
         if notified:
-            _mark_notified(app["id"], vacancy_id, status_id)
-        checked += 1
-        if checked % 100 == 0:
-            logging.info("Обработано %d/%d", checked, len(applicants))
+            for it in items:
+                _mark_notified(it["applicant_id"], vacancy_id, it["status_id"])
+            notified_total += len(notified)
 
     logging.info("Проверка завершена, отправлено %d уведомлений", notified_total)
 
