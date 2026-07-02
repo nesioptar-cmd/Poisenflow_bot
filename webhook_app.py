@@ -6,7 +6,20 @@ from flask import Flask, request
 
 logging.basicConfig(level=logging.INFO)
 
-BOT_TOKEN = os.environ["BOT_TOKEN"]
+env_path = Path(__file__).parent / ".env"
+if env_path.exists():
+    with open(env_path) as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, _, value = line.partition("=")
+                os.environ.setdefault(key.strip(), value.strip())
+
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+if not BOT_TOKEN:
+    raise RuntimeError(
+        "BOT_TOKEN не задан. Создайте .env файл в папке проекта с содержимым: BOT_TOKEN=..."
+    )
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 DB_PATH = Path(__file__).parent / "mapping.db"
 
