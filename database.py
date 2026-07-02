@@ -14,6 +14,13 @@ def _init_db():
         "  created_at TEXT DEFAULT (datetime('now'))"
         ")"
     )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS user_settings ("
+        "  chat_id INTEGER PRIMARY KEY,"
+        "  status_change INTEGER DEFAULT 1,"
+        "  overdue INTEGER DEFAULT 0"
+        ")"
+    )
     conn.commit()
     conn.close()
 
@@ -60,3 +67,44 @@ def _get_all_mappings() -> list[tuple[str, int]]:
     ).fetchall()
     conn.close()
     return rows
+
+
+def _get_settings(chat_id: int) -> tuple[int, int]:
+    conn = sqlite3.connect(str(DB_PATH))
+    row = conn.execute(
+        "SELECT status_change, overdue FROM user_settings WHERE chat_id = ?", (chat_id,)
+    ).fetchone()
+    conn.close()
+    if row:
+        return row[0], row[1]
+    return 1, 0
+
+
+def _set_settings(chat_id: int, status_change: int | None = None, overdue: int | None = None):
+    conn = sqlite3.connect(str(DB_PATH))
+    current = conn.execute(
+        "SELECT status_change, overdue FROM user_settings WHERE chat_id = ?", (chat_id,)
+    ).fetchone()
+    if current:
+        sc = status_change if status_change is not None else current[0]
+        ov = overdue if overdue is not None else current[1]
+        conn.execute(
+            "UPDATE user_settings SET status_change = ?, overdue = ? WHERE chat_id = ?",
+            (sc, ov, chat_id),
+        )
+    else:
+        conn.execute(
+            "INSERT INTO user_settings (chat_id, status_change, overdue) VALUES (?, ?, ?)",
+            (chat_id, status_change if status_change is not None else 1,
+             overdue if overdue is not None else 0),
+        )
+    conn.commit()
+    conn.close()
+
+
+async def get_settings(chat_id: int) -> tuple[int, int]:
+    return await asyncio.to_thread(_get_settings, chat_id)
+
+
+async def set_settings(chat_id: int, status_change: int | None = None, overdue: int | None = None):
+    await asyncio.to_thread(_set_settings, chat_id, status_change, overdue)

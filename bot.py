@@ -5,9 +5,10 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from config import settings
-from database import save_mapping, get_all_mappings
+from database import save_mapping, get_all_mappings, get_settings, set_settings
 
 bot = Bot(token=settings.BOT_TOKEN)
 dp = Dispatcher()
@@ -31,6 +32,29 @@ async def sync_to_cloud():
             except httpx.RequestError as e:
                 logging.warning("Ошибка синхронизации %s: %s", email, e)
     logging.info("Синхронизировано %d записей с облаком", len(mappings))
+
+
+def settings_text(sc: int, ov: int) -> str:
+    return (
+        "⚙️ <b>Настройки уведомлений</b>\n\n"
+        f"🔄 Смена этапа: {'✅ Вкл' if sc else '❌ Выкл'}\n"
+        f"⏰ Просрочки: {'✅ Вкл' if ov else '❌ Выкл'}\n\n"
+        "Нажмите на кнопку, чтобы изменить:"
+    )
+
+
+def settings_kb(chat_id: int, sc: int, ov: int) -> types.InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(
+        text=f"🔄 Смена этапа {'✅' if sc else '❌'}",
+        callback_data=f"tog_sc_{chat_id}",
+    )
+    b.button(
+        text=f"⏰ Просрочки {'✅' if ov else '❌'}",
+        callback_data=f"tog_ov_{chat_id}",
+    )
+    b.adjust(1)
+    return b.as_markup()
 
 
 @dp.startup()
@@ -68,14 +92,48 @@ async def process_email(message: types.Message, state: FSMContext):
 
     logging.info("Сохранено: %s -> %s", email, chat_id)
 
+    sc, ov = await get_settings(chat_id)
     await message.answer(
-        f"✅ Успешно привязано!\n"
-        f"Почта: `{email}`\n"
-        f"Telegram ID: `{chat_id}`\n\n"
-        f"Теперь, когда вы переведёте кандидата в Хантфлоу, "
-        f"сюда придёт уведомление."
+        f"✅ Успешно привязано!\nПочта: `{email}`",
+    )
+    await message.answer(
+        settings_text(sc, ov),
+        reply_markup=settings_kb(chat_id, sc, ov),
+        parse_mode="HTML",
     )
     await state.clear()
+
+
+@dp.message(Command("settings"))
+async def cmd_settings(message: types.Message):
+    chat_id = message.chat.id
+    sc, ov = await get_settings(chat_id)
+    await message.answer(
+        settings_text(sc, ov),
+        reply_markup=settings_kb(chat_id, sc, ov),
+        parse_mode="HTML",
+    )
+
+
+@dp.callback_query(lambda c: c.data.startswith("tog_"))
+async def toggle_setting(callback: types.CallbackQuery):
+    _, key, chat_id_str = callback.data.split("_", 2)
+    chat_id = int(chat_id_str)
+    if callback.from_user.id != chat_id:
+        await callback.answer("Это не ваши настройки", show_alert=True)
+        return
+    sc, ov = await get_settings(chat_id)
+    if key == "sc":
+        sc = 1 - sc
+    else:
+        ov = 1 - ov
+    await set_settings(chat_id, status_change=sc, overdue=ov)
+    await callback.message.edit_text(
+        settings_text(sc, ov),
+        reply_markup=settings_kb(chat_id, sc, ov),
+        parse_mode="HTML",
+    )
+    await callback.answer()
 
 
 async def main():
