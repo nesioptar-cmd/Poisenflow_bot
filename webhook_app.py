@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from flask import Flask, request
 
@@ -20,6 +21,9 @@ if not BOT_TOKEN:
     raise RuntimeError(
         "BOT_TOKEN не задан. Создайте .env файл в папке проекта с содержимым: BOT_TOKEN=..."
     )
+API_TOKEN = os.environ.get("HF_API_TOKEN")
+ACCOUNT_ID = os.environ.get("HF_ACCOUNT_ID")
+HF_API_BASE = "https://api.huntflow.ru/v2"
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 DB_PATH = Path(__file__).parent / "mapping.db"
 
@@ -220,6 +224,161 @@ def mark_overdue_notified():
 def get_overdue_recipients():
     chat_ids = _get_all_chat_ids_with_overdue()
     return {"chat_ids": chat_ids}
+
+
+# ─── Overdue Check (через внешний cron) ──────────────────────
+
+
+def _hf_get(path: str) -> dict:
+    import requests as rq
+    resp = rq.get(f"{HF_API_BASE}{path}", headers={"Authorization": f"Bearer {API_TOKEN}"})
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _get_statuses() -> dict[int, dict]:
+    data = _hf_get(f"/accounts/{ACCOUNT_ID}/vacancies/statuses")
+    return {s["id"]: s for s in data["items"] if not s.get("removed")}
+
+
+def _get_coworker_emails() -> dict[int, str]:
+    data = _hf_get(f"/accounts/{ACCOUNT_ID}/coworkers")
+    return {cw.get("member"): cw.get("email", "")
+            for cw in data.get("items", []) if cw.get("member")}
+
+
+def _get_all_applicants() -> list[dict]:
+    items = []
+    page = 1
+    while True:
+        data = _hf_get(
+            f"/accounts/{ACCOUNT_ID}/applicants?page={page}&count=100&order_by=-id"
+        )
+        items.extend(data.get("items", []))
+        if page >= data.get("total_pages", 1):
+            break
+        page += 1
+    return items
+
+
+def _get_applicant_logs(applicant_id: int) -> list[dict]:
+    data = _hf_get(
+        f"/accounts/{ACCOUNT_ID}/applicants/{applicant_id}/logs?page=1&count=5"
+    )
+    return data.get("items", [])
+
+
+def _get_vacancy_name(vacancy_id: int) -> str:
+    try:
+        data = _hf_get(f"/accounts/{ACCOUNT_ID}/vacancies/{vacancy_id}")
+        return data.get("position", f"ID {vacancy_id}")
+    except Exception:
+        return f"ID {vacancy_id}"
+
+
+def _run_overdue_check():
+    if not API_TOKEN or not ACCOUNT_ID:
+        return {"error": "HF_API_TOKEN или HF_ACCOUNT_ID не настроены"}
+
+    import requests as rq
+
+    statuses = _get_statuses()
+    coworker_emails = _get_coworker_emails()
+    applicants = _get_all_applicants()
+    notified_total = 0
+
+    for app in applicants:
+        links = app.get("links", [])
+        active = [l for l in links if l.get("rejection_reason") is None]
+        if not active:
+            continue
+
+        link = active[0]
+        status_id = link.get("status")
+        vacancy_id = link.get("vacancy")
+        changed_str = link.get("changed")
+
+        if not status_id or not changed_str:
+            continue
+
+        status_info = statuses.get(status_id)
+        if not status_info:
+            continue
+
+        max_days = status_info.get("stay_duration")
+        if max_days is None:
+            continue
+
+        changed = datetime.fromisoformat(changed_str)
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        days_on = (now - changed).days
+
+        if days_on <= max_days:
+            continue
+
+        if _was_notified(app["id"], vacancy_id, status_id):
+            continue
+
+        recruiter_email = None
+        for log in _get_applicant_logs(app["id"]):
+            if log.get("type") == "STATUS" and log.get("status") == status_id:
+                ai = log.get("account_info", {}) or {}
+                member_id = ai.get("member")
+                if member_id:
+                    recruiter_email = coworker_emails.get(member_id)
+                break
+
+        app_name = " ".join(filter(None, [
+            app.get("first_name"), app.get("last_name")
+        ])) or f"ID {app['id']}"
+        vacancy_name = _get_vacancy_name(vacancy_id)
+        stage_name = status_info.get("name", f"ID {status_id}")
+
+        text = (
+            f"⏰ <b>Просрочка!</b>\n\n"
+            f"👤 <b>Кандидат:</b> {app_name}\n"
+            f"💼 <b>Вакансия:</b> {vacancy_name}\n"
+            f"🎯 <b>Этап:</b> {stage_name}\n"
+            f"⏳ <b>Просрочено:</b> {days_on} дн. (максимум {max_days})"
+        )
+
+        notified = set()
+
+        if recruiter_email:
+            chat_id = _get_chat_id(recruiter_email)
+            if chat_id and chat_id not in notified:
+                try:
+                    rq.post(TELEGRAM_API_URL, json={
+                        "chat_id": chat_id, "text": text, "parse_mode": "HTML",
+                    })
+                    notified.add(chat_id)
+                except Exception:
+                    pass
+
+        if not notified:
+            for chat_id in _get_all_chat_ids_with_overdue():
+                if chat_id not in notified:
+                    try:
+                        rq.post(TELEGRAM_API_URL, json={
+                            "chat_id": chat_id, "text": text, "parse_mode": "HTML",
+                        })
+                        notified.add(chat_id)
+                    except Exception:
+                        pass
+
+        if notified:
+            _mark_notified(app["id"], vacancy_id, status_id)
+            notified_total += len(notified)
+
+    return {"status": "ok", "notifications": notified_total}
+
+
+@app.route("/api/check-overdue", methods=["GET"])
+def handle_check_overdue():
+    result = _run_overdue_check()
+    if "error" in result:
+        return result, 400
+    return result
 
 
 @app.route("/huntflow-webhook", methods=["POST"])
