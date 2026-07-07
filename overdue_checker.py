@@ -156,7 +156,7 @@ def get_vacancy_name(vacancy_id: int) -> str:
         return f"ID {vacancy_id}"
 
 
-REMIND_IMAGE = Path(__file__).parent / "Remind.png"
+REMIND_IMAGE = Path(__file__).parent / "reminder.jpeg"
 
 
 def send_telegram(chat_id: int, text: str):
