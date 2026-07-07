@@ -156,7 +156,21 @@ def get_vacancy_name(vacancy_id: int) -> str:
         return f"ID {vacancy_id}"
 
 
+REMIND_IMAGE = Path(__file__).parent / "Remind.png"
+
+
 def send_telegram(chat_id: int, text: str):
+    if REMIND_IMAGE.exists():
+        try:
+            with open(REMIND_IMAGE, "rb") as f:
+                requests.post(
+                    f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
+                    files={"photo": f},
+                    data={"chat_id": chat_id, "caption": text[:1000], "parse_mode": "HTML"},
+                )
+            return
+        except Exception:
+            pass
     requests.post(
         f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
         json={"chat_id": chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True},

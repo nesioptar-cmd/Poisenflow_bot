@@ -124,20 +124,19 @@ async def cmd_settings(message: types.Message):
 
 @dp.callback_query(lambda c: c.data.startswith(("tog_", "freq_")))
 async def toggle_setting(callback: types.CallbackQuery):
-    parts = callback.data.split("_", 2)
-    key = parts[0]
-    value = parts[1]
-    chat_id = int(parts[2])
+    # format: {prefix}_{value}_{chat_id}, chat_id always after last _
+    chat_id = int(callback.data.rsplit("_", 1)[1])
     if callback.from_user.id != chat_id:
         await callback.answer("Это не ваши настройки", show_alert=True)
         return
+    prefix, value = callback.data.rsplit("_", 1)[0].split("_", 1)
     sc, ov, freq = await get_settings(chat_id)
-    if key == "tog":
+    if prefix == "tog":
         if value == "sc":
             sc = 1 - sc
         else:
             ov = 1 - ov
-    elif key == "freq":
+    elif prefix == "freq":
         freq = value
     await set_settings(chat_id, status_change=sc, overdue=ov, check_frequency=freq)
     await callback.message.edit_text(
