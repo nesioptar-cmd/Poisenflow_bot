@@ -54,6 +54,11 @@ def init_db():
         "  PRIMARY KEY (applicant_id, vacancy_id, status_id)"
         ")"
     )
+    for col in ["check_frequency", "last_overdue_notified"]:
+        try:
+            conn.execute(f"ALTER TABLE user_settings ADD COLUMN {col} TEXT")
+        except sqlite3.OperationalError:
+            pass
     conn.commit()
     conn.close()
 
@@ -65,6 +70,34 @@ def _get_chat_id(email: str) -> int | None:
     ).fetchone()
     conn.close()
     return row[0] if row else None
+
+
+def _get_frequency(chat_id: int) -> str:
+    conn = sqlite3.connect(str(DB_PATH))
+    row = conn.execute(
+        "SELECT check_frequency FROM user_settings WHERE chat_id = ?", (chat_id,)
+    ).fetchone()
+    conn.close()
+    return row[0] if row and row[0] else "hourly"
+
+
+def _get_last_notified(chat_id: int) -> str | None:
+    conn = sqlite3.connect(str(DB_PATH))
+    row = conn.execute(
+        "SELECT last_overdue_notified FROM user_settings WHERE chat_id = ?", (chat_id,)
+    ).fetchone()
+    conn.close()
+    return row[0] if row and row[0] else None
+
+
+def _update_last_notified(chat_id: int):
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.execute(
+        "UPDATE user_settings SET last_overdue_notified = ? WHERE chat_id = ?",
+        (datetime.now().isoformat(), chat_id),
+    )
+    conn.commit()
+    conn.close()
 
 
 # ─── HF API ────────────────────────────────────────────────────
@@ -241,6 +274,22 @@ def check_overdue():
             logging.info("Рекрутер %s не авторизован в боте — пропущен", recruiter_email)
             continue
 
+        freq = _get_frequency(chat_id)
+        last = _get_last_notified(chat_id)
+        if last:
+            last_dt = datetime.fromisoformat(last)
+            now = datetime.now()
+            hours_since = (now - last_dt).total_seconds() / 3600
+            if freq == "daily" and hours_since < 24:
+                logging.info("Рекрутер %s: daily, прошло %.1fч — пропущен", recruiter_email, hours_since)
+                continue
+            elif freq == "3x_day" and hours_since < 8:
+                logging.info("Рекрутер %s: 3x_day, прошло %.1fч — пропущен", recruiter_email, hours_since)
+                continue
+            elif freq == "hourly" and hours_since < 0.9:
+                logging.info("Рекрутер %s: hourly, прошло %.1fч — пропущен", recruiter_email, hours_since)
+                continue
+
         parts = ["⏰ <b>Просрочки по вашим кандидатам</b>"]
         for vacancy_id, items in vacancies_dict.items():
             vname = get_vacancy_name(vacancy_id)
@@ -254,6 +303,7 @@ def check_overdue():
         try:
             send_telegram(chat_id, text)
             notified_total += 1
+            _update_last_notified(chat_id)
             logging.info("Рекрутер %s уведомлён (%d вакансий)", recruiter_email, len(vacancies_dict))
         except Exception as e:
             logging.error("Ошибка рекрутеру %s: %s", recruiter_email, e)

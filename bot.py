@@ -34,16 +34,20 @@ async def sync_to_cloud():
     logging.info("Синхронизировано %d записей с облаком", len(mappings))
 
 
-def settings_text(sc: int, ov: int) -> str:
+FREQ_LABELS = {"hourly": "Каждый час", "3x_day": "3 раза в день", "daily": "Раз в день"}
+
+
+def settings_text(sc: int, ov: int, freq: str) -> str:
     return (
         "⚙️ <b>Настройки уведомлений</b>\n\n"
         f"🔄 Смена этапа: {'✅ Вкл' if sc else '❌ Выкл'}\n"
-        f"⏰ Просрочки: {'✅ Вкл' if ov else '❌ Выкл'}\n\n"
+        f"⏰ Просрочки: {'✅ Вкл' if ov else '❌ Выкл'}\n"
+        f"📡 Частота проверки: {FREQ_LABELS.get(freq, freq)}\n\n"
         "Нажмите на кнопку, чтобы изменить:"
     )
 
 
-def settings_kb(chat_id: int, sc: int, ov: int) -> types.InlineKeyboardMarkup:
+def settings_kb(chat_id: int, sc: int, ov: int, freq: str) -> types.InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(
         text=f"🔄 Смена этапа {'✅' if sc else '❌'}",
@@ -53,6 +57,9 @@ def settings_kb(chat_id: int, sc: int, ov: int) -> types.InlineKeyboardMarkup:
         text=f"⏰ Просрочки {'✅' if ov else '❌'}",
         callback_data=f"tog_ov_{chat_id}",
     )
+    for key, label in FREQ_LABELS.items():
+        mark = "✅" if key == freq else "⚪️"
+        b.button(text=f"{mark} {label}", callback_data=f"freq_{key}_{chat_id}")
     b.adjust(1)
     return b.as_markup()
 
@@ -92,13 +99,13 @@ async def process_email(message: types.Message, state: FSMContext):
 
     logging.info("Сохранено: %s -> %s", email, chat_id)
 
-    sc, ov = await get_settings(chat_id)
+    sc, ov, freq = await get_settings(chat_id)
     await message.answer(
         f"✅ Успешно привязано!\nПочта: `{email}`",
     )
     await message.answer(
-        settings_text(sc, ov),
-        reply_markup=settings_kb(chat_id, sc, ov),
+        settings_text(sc, ov, freq),
+        reply_markup=settings_kb(chat_id, sc, ov, freq),
         parse_mode="HTML",
     )
     await state.clear()
@@ -107,30 +114,35 @@ async def process_email(message: types.Message, state: FSMContext):
 @dp.message(Command("settings"))
 async def cmd_settings(message: types.Message):
     chat_id = message.chat.id
-    sc, ov = await get_settings(chat_id)
+    sc, ov, freq = await get_settings(chat_id)
     await message.answer(
-        settings_text(sc, ov),
-        reply_markup=settings_kb(chat_id, sc, ov),
+        settings_text(sc, ov, freq),
+        reply_markup=settings_kb(chat_id, sc, ov, freq),
         parse_mode="HTML",
     )
 
 
-@dp.callback_query(lambda c: c.data.startswith("tog_"))
+@dp.callback_query(lambda c: c.data.startswith(("tog_", "freq_")))
 async def toggle_setting(callback: types.CallbackQuery):
-    _, key, chat_id_str = callback.data.split("_", 2)
-    chat_id = int(chat_id_str)
+    parts = callback.data.split("_", 2)
+    key = parts[0]
+    value = parts[1]
+    chat_id = int(parts[2])
     if callback.from_user.id != chat_id:
         await callback.answer("Это не ваши настройки", show_alert=True)
         return
-    sc, ov = await get_settings(chat_id)
-    if key == "sc":
-        sc = 1 - sc
-    else:
-        ov = 1 - ov
-    await set_settings(chat_id, status_change=sc, overdue=ov)
+    sc, ov, freq = await get_settings(chat_id)
+    if key == "tog":
+        if value == "sc":
+            sc = 1 - sc
+        else:
+            ov = 1 - ov
+    elif key == "freq":
+        freq = value
+    await set_settings(chat_id, status_change=sc, overdue=ov, check_frequency=freq)
     await callback.message.edit_text(
-        settings_text(sc, ov),
-        reply_markup=settings_kb(chat_id, sc, ov),
+        settings_text(sc, ov, freq),
+        reply_markup=settings_kb(chat_id, sc, ov, freq),
         parse_mode="HTML",
     )
     await callback.answer()
