@@ -444,12 +444,17 @@ def handle_huntflow_webhook():
     last = applicant.get("last_name", "")
     applicant_name = f"{first} {last}".strip() or "Неизвестный кандидат"
     applicant_id = applicant.get("id")
+    vacancy_id = vacancy.get("id")
     vacancy_name = vacancy.get("position", "Без названия")
+    status_id = new_status.get("id")
     status_name = new_status.get("name", "Неизвестный этап")
 
     applicant_link = ""
-    if HF_APP_BASE and applicant_id:
-        applicant_link = f'\n🔗 <a href="{HF_APP_BASE}/applicant/{applicant_id}/">Открыть карточку кандидата</a>'
+    if HF_APP_BASE and applicant_id and vacancy_id and status_id:
+        applicant_link = (
+            f'\n🔗 <a href="{HF_APP_BASE}/vacancy/{vacancy_id}/filter/{status_id}/id/{applicant_id}">'
+            f"Открыть карточку кандидата</a>"
+        )
 
     message_text = (
         f"🔄 <b>Смена этапа кандидата!</b>\n\n"
