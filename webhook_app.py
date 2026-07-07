@@ -27,7 +27,7 @@ HF_API_BASE = "https://api.huntflow.ru/v2"
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 DB_PATH = Path(__file__).parent / "mapping.db"
 
-ACCOUNT_NICK = None
+HF_APP_BASE = None
 if API_TOKEN and ACCOUNT_ID:
     try:
         import requests as _rq
@@ -35,10 +35,13 @@ if API_TOKEN and ACCOUNT_ID:
             f"{HF_API_BASE}/accounts/{ACCOUNT_ID}",
             headers={"Authorization": f"Bearer {API_TOKEN}"},
         )
-        ACCOUNT_NICK = _resp.json().get("nick")
+        _nick = _resp.json().get("nick")
+        if _nick:
+            HF_APP_BASE = f"https://huntflow.ru/app/my/{_nick}"
     except Exception:
         pass
-HF_APP_BASE = f"https://huntflow.ru/app/my/{ACCOUNT_NICK}" if ACCOUNT_NICK else None
+if not HF_APP_BASE:
+    HF_APP_BASE = "https://huntflow.ru/app/my/huntflow20221"
 
 app = Flask(__name__)
 
