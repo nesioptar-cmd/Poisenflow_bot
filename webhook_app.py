@@ -27,6 +27,19 @@ HF_API_BASE = "https://api.huntflow.ru/v2"
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 DB_PATH = Path(__file__).parent / "mapping.db"
 
+ACCOUNT_NICK = None
+if API_TOKEN and ACCOUNT_ID:
+    try:
+        import requests as _rq
+        _resp = _rq.get(
+            f"{HF_API_BASE}/accounts/{ACCOUNT_ID}",
+            headers={"Authorization": f"Bearer {API_TOKEN}"},
+        )
+        ACCOUNT_NICK = _resp.json().get("nick")
+    except Exception:
+        pass
+HF_APP_BASE = f"https://huntflow.ru/app/my/{ACCOUNT_NICK}" if ACCOUNT_NICK else None
+
 app = Flask(__name__)
 
 
@@ -427,12 +440,17 @@ def handle_huntflow_webhook():
     first = applicant.get("first_name", "")
     last = applicant.get("last_name", "")
     applicant_name = f"{first} {last}".strip() or "Неизвестный кандидат"
+    applicant_id = applicant.get("id")
     vacancy_name = vacancy.get("position", "Без названия")
     status_name = new_status.get("name", "Неизвестный этап")
 
+    applicant_link = ""
+    if HF_APP_BASE and applicant_id:
+        applicant_link = f'\n🔗 <a href="{HF_APP_BASE}/applicant/{applicant_id}/">Открыть карточку кандидата</a>'
+
     message_text = (
         f"🔄 <b>Смена этапа кандидата!</b>\n\n"
-        f"👤 <b>Кандидат:</b> {applicant_name}\n"
+        f"👤 <b>Кандидат:</b> {applicant_name}{applicant_link}\n"
         f"💼 <b>Вакансия:</b> {vacancy_name}\n"
         f"🎯 <b>Новый этап:</b> 👉 {status_name} 👈"
     )
